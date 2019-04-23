@@ -1,0 +1,14 @@
+{
+  "name": "dcs-react-router-sync",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Sylvain Quendez",
+  "license": "SEE LICENSE IN LICENSE",
+  "peerDependencies": {
+    "dcs-client": "1.x"
+  }
+}
