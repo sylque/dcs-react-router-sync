@@ -10,5 +10,9 @@
   "license": "SEE LICENSE IN LICENSE",
   "peerDependencies": {
     "dcs-client": "1.x"
-  }
+  },
+  "files": [
+    "index.js",
+    "README.md"
+  ]
 }
