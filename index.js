@@ -78,13 +78,15 @@ exports.runReactRouterSync = ({ browserHistory, routeMatcher }) => {
 
     const params = new URLSearchParams(location.search)
     const interactMode = params.get('dcs-interact-mode')
+    const showRightStr = params.get('dcs-show-right')
+    const showRight = showRightStr === 'true' || showRightStr === '1'
     const route = interactMode
       ? {
           layout: 'WITH_SPLIT_BAR',
           pageName,
           triggerId: params.get('dcs-trigger-id'),
           interactMode,
-          showRight: !!params.get('dcs-show-right')
+          showRight
         }
       : {
           layout: 'FULL_CLIENT',
