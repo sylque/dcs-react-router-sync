@@ -77,30 +77,22 @@ exports.runReactRouterSync = ({ browserHistory, routeMatcher }) => {
     }
 
     const params = new URLSearchParams(location.search)
+    const triggerId = params.get('dcs-trigger-id') || undefined
     const interactMode = params.get('dcs-interact-mode')
     const showRightStr = params.get('dcs-show-right')
     const showRight = showRightStr === 'true' || showRightStr === '1'
     const route = interactMode
-      ? {
-          layout: 'WITH_SPLIT_BAR',
-          pageName,
-          triggerId: params.get('dcs-trigger-id'),
-          interactMode,
-          showRight
-        }
-      : {
-          layout: 'FULL_CLIENT',
-          pageName
-        }
+      ? { layout: showRight ? 3 : 2, pageName, triggerId, interactMode }
+      : { layout: 0, pageName }
 
     const clientContext = { iDidThis: true }
     comToPlugin.postSetDiscourseRoute({ route, mode: 'REPLACE', clientContext })
 
-    if (params.get('dcs-redirect')) {
+    if (params.get('dcs-redirect-layout-2')) {
       comToPlugin.postSetRedirects([
         {
-          src: { ...route, showRight: false },
-          dest: { layout: 'FULL_CLIENT' }
+          src: Object.assign({}, route, { layout: 2 }),
+          dest: { layout: 0, pageName: '@SAME_AS_SRC@' }
         }
       ])
     }
@@ -127,7 +119,7 @@ exports.runReactRouterSync = ({ browserHistory, routeMatcher }) => {
         return
       }
 
-      if (route.layout === 'FULL_DISCOURSE') {
+      if (route.layout === 1) {
         return
       }
 
