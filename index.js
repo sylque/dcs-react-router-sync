@@ -56,45 +56,62 @@ exports.withCounts = (WrappedComponent, pathname = null) =>
 
 //------------------------------------------------------------------------------
 
+// This function is designed to run as much code as possible when there
+// is no iframe. THIS IS FOR DEBUGGING PURPOSE, so that the package can be
+// tested without an iframe. I know the code could have been simpler with
+// a single "if (!inIFrame()) return" at the begining.
 exports.runReactRouterSync = ({ browserHistory, routeMatcher }) => {
   g_browserHistory = browserHistory
 
   // Handle internal React route changes by analysing the url, extract Docuss
   // query params and set the Discourse route accordingly.
-  //
-  // onReactRouteChange will *not* be called at load time, which is good,
-  // cause Discourse is the leader and we will react to its first
-  // onDiscourseRoutePushed instead
+  // This is *not* called at load time, which is good, because Discourse is the 
+  // leader and we want to react to its first onDiscourseRoutePushed instead.
   browserHistory.listen(async (location, method) => {
     if (g_discourseDidThis) {
       return
     }
 
-    const pageName = await routeMatcher.getPageName(location.pathname)
+    // Get query params
+    const params = new URLSearchParams(location.search)
+    const layoutStr = params.get('dcs-layout')
+    const layout = layoutStr ? parseInt(layoutStr) : undefined
+    const interactMode = params.get('dcs-interact-mode') || undefined
+    const triggerId = params.get('dcs-trigger-id') || undefined
+    const pathname = params.get('dcs-pathname') || undefined
 
-    if (!inIFrame()) {
+    // Check query params
+    if (!!interactMode !== (layout === 2 || layout === 3)) {
+      throw new Error(
+        'dcs-react-router-sync: invalid query param (dcs-layout or dcs-interact-mode'
+      )
+    }
+    if (triggerId && !(layout === 2 || layout === 3)) {
+      throw new Error(
+        'dcs-react-router-sync: invalid query param (dcs-layout or dcs-trigger-id)'
+      )
+    }
+    if (!!pathname !== (layout === 1)) {
+      throw new Error(
+        'dcs-react-router-sync: invalid query param (dcs-layout or dcs-pathname)'
+      )
+    }
+
+    // No query params: quit
+    if (layout === undefined) {
       return
     }
 
-    const params = new URLSearchParams(location.search)
-    const triggerId = params.get('dcs-trigger-id') || undefined
-    const interactMode = params.get('dcs-interact-mode')
-    const showRightStr = params.get('dcs-show-right')
-    const showRight = showRightStr === 'true' || showRightStr === '1'
-    const route = interactMode
-      ? { layout: showRight ? 3 : 2, pageName, triggerId, interactMode }
-      : { layout: 0, pageName }
+    // Get the existing page name or create a new one
+    const pageName = await routeMatcher.getPageName(location.pathname)
 
-    const clientContext = { iDidThis: true }
-    comToPlugin.postSetDiscourseRoute({ route, mode: 'REPLACE', clientContext })
-
-    if (params.get('dcs-redirect-layout-2')) {
-      comToPlugin.postSetRedirects([
-        {
-          src: Object.assign({}, route, { layout: 2 }),
-          dest: { layout: 0, pageName: '@SAME_AS_SRC@' }
-        }
-      ])
+    // Set the new route
+    if (inIFrame()) {
+      comToPlugin.postSetDiscourseRoute({
+        route: { layout, pageName, interactMode, triggerId, pathname },
+        mode: 'REPLACE',
+        clientContext: { iDidThis: true }
+      })
     }
   })
 
