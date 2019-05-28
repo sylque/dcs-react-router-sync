@@ -1,58 +1,15 @@
 const React = require('react')
+const ReactDOM = require('react-dom')
 const { comToPlugin, inIFrame } = require('dcs-client')
 
 //------------------------------------------------------------------------------
 
-let g_browserHistory = null
+let g_initDone = false
 let g_discourseDidThis = false
-const g_instancesWaitingForCounts = new Set()
-let g_counts = null
-
-// Return a modified component
-exports.withCounts = (WrappedComponent, pathname = null) =>
-  class WithCounts extends React.Component {
-    constructor(props) {
-      super(props)
-
-      if (!pathname && !g_browserHistory) {
-        throw new Error(
-          'You need to call runReactRouterSync() before you can use withCounts()'
-        )
-      }
-
-      this.pathname = pathname || g_browserHistory.location.pathname
-
-      this.state = { counts: this._filteredCounts() }
-    }
-
-    updateCounts() {
-      this.setState({ counts: this._filteredCounts() })
-    }
-
-    _filteredCounts() {
-      return g_counts
-        ? g_counts.filter(c => c.pathname === this.pathname)
-        : null
-    }
-
-    componentDidMount() {
-      if (!this.state.counts) {
-        g_instancesWaitingForCounts.add(this)
-      }
-    }
-
-    componentWillUnmount() {
-      g_instancesWaitingForCounts.delete(this)
-    }
-
-    render() {
-      //return <WrappedComponent {...this.props} counts={this.state.counts} />
-      return React.createElement(WrappedComponent, {
-        ...this.props,
-        counts: this.state.counts
-      })
-    }
-  }
+let g_discoursePushedData = null
+const g_components = new Set()
+let g_prevSelectedNode = null
+let g_selectedNode = null
 
 //------------------------------------------------------------------------------
 
@@ -61,29 +18,24 @@ exports.withCounts = (WrappedComponent, pathname = null) =>
 // tested without an iframe. I know the code could have been simpler with
 // a single "if (!inIFrame()) return" at the begining.
 exports.runReactRouterSync = ({ browserHistory, routeMatcher }) => {
-  g_browserHistory = browserHistory
+  g_initDone = true
 
-  // Handle internal React route changes by analysing the url, extract Docuss
-  // query params and set the Discourse route accordingly.
-  // This is *not* called at load time, which is good, because Discourse is the 
+  //***** Handle internal React route changes *****
+  // Parse the url, extract Docuss query params and set the Discourse route accordingly.
+  // This is *not* called at load time, which is good, because Discourse is the
   // leader and we want to react to its first onDiscourseRoutePushed instead.
   browserHistory.listen(async (location, method) => {
-    if (g_discourseDidThis) {
-      return
-    }
-
     // Get query params
     const params = new URLSearchParams(location.search)
     const layoutStr = params.get('dcs-layout')
-    const layout = layoutStr ? parseInt(layoutStr) : undefined
+    const layout = layoutStr ? parseInt(layoutStr) : 0
     const interactMode = params.get('dcs-interact-mode') || undefined
     const triggerId = params.get('dcs-trigger-id') || undefined
-    const pathname = params.get('dcs-pathname') || undefined
 
     // Check query params
     if (!!interactMode !== (layout === 2 || layout === 3)) {
       throw new Error(
-        'dcs-react-router-sync: invalid query param (dcs-layout or dcs-interact-mode'
+        'dcs-react-router-sync: invalid query param (dcs-layout or dcs-interact-mode)'
       )
     }
     if (triggerId && !(layout === 2 || layout === 3)) {
@@ -91,16 +43,20 @@ exports.runReactRouterSync = ({ browserHistory, routeMatcher }) => {
         'dcs-react-router-sync: invalid query param (dcs-layout or dcs-trigger-id)'
       )
     }
-    if (!!pathname !== (layout === 1)) {
+    if (layout && (layout < 0 || layout === 1 || layout > 3)) {
       throw new Error(
-        'dcs-react-router-sync: invalid query param (dcs-layout or dcs-pathname)'
+        'dcs-react-router-sync: unsupported query param (dcs-layout)'
       )
     }
 
-    // No query params: quit
-    if (layout === undefined) {
+    // Update the "selected" state in registered components
+    g_components.forEach(c => c._updateSelected(triggerId))
+
+    if (g_discourseDidThis) {
       return
     }
+
+    g_discoursePushedData = null
 
     // Get the existing page name or create a new one
     const pageName = await routeMatcher.getPageName(location.pathname)
@@ -108,7 +64,7 @@ exports.runReactRouterSync = ({ browserHistory, routeMatcher }) => {
     // Set the new route
     if (inIFrame()) {
       comToPlugin.postSetDiscourseRoute({
-        route: { layout, pageName, interactMode, triggerId, pathname },
+        route: { layout, pageName, interactMode, triggerId },
         mode: 'REPLACE',
         clientContext: { iDidThis: true }
       })
@@ -119,18 +75,14 @@ exports.runReactRouterSync = ({ browserHistory, routeMatcher }) => {
     return
   }
 
+  //***** Handle Discourse route changes *****
+  // When a route change is triggerd by Disourse, we need to change the React
+  // Router route
   comToPlugin.onDiscourseRoutePushed(
     async ({ route, descr, counts, clientContext }) => {
-      // Store the counts, enriches with the associated pathnames
-      if (!g_counts) {
-        const countPromises = counts.map(c =>
-          routeMatcher
-            .getPathname(c.pageName)
-            .then(pathname => Object.assign({}, c, { pathname }))
-        )
-        g_counts = await Promise.all(countPromises)
-        g_instancesWaitingForCounts.forEach(wc => wc.updateCounts())
-      }
+      // Store the pushed data and update registered components (see withDcs below)
+      g_discoursePushedData = { currentRoute: route, counts }
+      g_components.forEach(c => c._updateCount())
 
       if (clientContext && clientContext.iDidThis) {
         return
@@ -140,29 +92,152 @@ exports.runReactRouterSync = ({ browserHistory, routeMatcher }) => {
         return
       }
 
+      // Get the pathname corresponding to the new route
       const pathname = await routeMatcher.getPathname(route.pageName)
       if (!pathname) {
         throw new Error(`Cannot find pathname for page "${route.pageName}"`)
       }
-      const params = route.triggerId ? `?dcs-trigger=${route.triggerId}` : ''
-      const path = pathname + params
 
+      // Add the correct query params. It is not necessary for this module,
+      // but required for users to know the current route.
+      let params = ''
+      if (route.layout !== 0) {
+        params = `?dcs-layout=${route.layout}&dcs-interact-mode=${
+          route.interactMode
+        }`
+        if (route.triggerId) {
+          params += `&dcs-trigger-id=${route.triggerId}`
+        }
+      }
       // This test is necessary. Indeed, browserHistory.replace() actually
       // performs a replace even if the url hasn't change, which in turn
       // call the history.listen() hook.
-      const loc = browserHistory.location
-      const lastPath = loc.pathname + loc.search + loc.hash
-      if (path !== lastPath) {
+      if (location.pathname !== pathname || location.search !== params) {
         // Don't store this in the history state, otherwise it will interfere
         // when user clicks the back button
         g_discourseDidThis = true
 
-        browserHistory.replace(pathname)
+        browserHistory.replace(pathname + params)
 
         g_discourseDidThis = false
       }
     }
   )
 }
+
+//------------------------------------------------------------------------------
+
+// Return a modified WrappedComponent with additional dcsCount and dcsSelected properties
+// - pathname is optional. If not provided, the pageName corresponding to the current page is used.
+// - The triggerId, if there is one, must be passed as a prop
+exports.withDcs = (WrappedComponent, pathname = undefined) =>
+  class WithDcs extends React.Component {
+    constructor(props) {
+      super(props)
+
+      if (!g_initDone) {
+        throw new Error(
+          'You need to call runReactRouterSync() before you can use withDcs()'
+        )
+      }
+
+      this.pageNameFromPathname = pathname && routeMatcher.getPageName(pathname)
+
+      const dcsSelected =
+        new URLSearchParams(location.search).get('dcs-trigger-id') ===
+        this.props.triggerId
+
+      this.state = { dcsCount: undefined, dcsSelected }
+
+      g_components.add(this)
+
+      if (g_discoursePushedData) {
+        this._updateCount(true)
+      }
+    }
+
+    componentWillUnmount() {
+      g_components.delete(this)
+    }
+
+    componentDidMount() {
+      if (this.state.dcsSelected) {
+        // Scroll the component into view
+        g_selectedNode = ReactDOM.findDOMNode(this)
+        g_selectedNode.scrollIntoView()
+      }
+    }
+
+    async _updateCount(init = false) {
+      if (this.state.dcsCount !== undefined) {
+        return
+      }
+
+      const { counts, currentRoute } = g_discoursePushedData
+
+      const triggerId = this.props.triggerId
+
+      const pageName = this.pageNameFromPathname
+        ? await this.pageNameFromPathname
+        : currentRoute.pageName
+
+      if (!pageName) {
+        return
+      }
+
+      const found = counts.find(
+        c =>
+          c.pageName === pageName &&
+          (triggerId === undefined || c.triggerId === triggerId)
+      )
+      const dcsCount = found ? found.count : 0
+
+      if (init) {
+        this.state.dcsCount = dcsCount
+      } else {
+        this.setState({ dcsCount })
+      }
+    }
+
+    _updateSelected(selectedTriggerId) {
+      const dcsSelected =
+        this.props.triggerId && this.props.triggerId === selectedTriggerId
+      if (this.state.dcsSelected !== dcsSelected) {
+        this.setState({ dcsSelected })
+        if (dcsSelected) {
+          g_prevSelectedNode = g_selectedNode
+          g_selectedNode = ReactDOM.findDOMNode(this)
+        } else if (!selectedTriggerId) {
+          g_prevSelectedNode = g_selectedNode
+          g_selectedNode = null
+        }
+      }
+    }
+
+    render() {
+      return React.createElement(WrappedComponent, {
+        ...this.props,
+        dcsCount: this.state.dcsCount,
+        dcsSelected: this.state.dcsSelected
+      })
+    }
+  }
+
+//------------------------------------------------------------------------------
+
+// Resize event with debounce
+// https://developer.mozilla.org/en-US/docs/Web/Events/resize#setTimeout
+window.addEventListener('resize', evt => {
+  if (this.resizeTimer !== null) {
+    clearTimeout(this.resizeTimer)
+  }
+  this.resizeTimer = setTimeout(() => {
+    this.resizeTimer = null
+    const node = g_selectedNode || g_prevSelectedNode
+    if (node) {
+      node.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, 100)
+})
 
 //------------------------------------------------------------------------------
