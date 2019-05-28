@@ -4,7 +4,7 @@ const { comToPlugin, inIFrame } = require('dcs-client')
 
 //------------------------------------------------------------------------------
 
-let g_initDone = false
+let g_routeMatcher = null
 let g_discourseDidThis = false
 let g_discoursePushedData = null
 const g_components = new Set()
@@ -18,7 +18,10 @@ let g_selectedNode = null
 // tested without an iframe. I know the code could have been simpler with
 // a single "if (!inIFrame()) return" at the begining.
 exports.runReactRouterSync = ({ browserHistory, routeMatcher }) => {
-  g_initDone = true
+  if (g_routeMatcher) {
+    throwError('"runReactRouterSync" should be called only once')
+  }
+  g_routeMatcher = routeMatcher
 
   //***** Handle internal React route changes *****
   // Parse the url, extract Docuss query params and set the Discourse route accordingly.
@@ -34,19 +37,13 @@ exports.runReactRouterSync = ({ browserHistory, routeMatcher }) => {
 
     // Check query params
     if (!!interactMode !== (layout === 2 || layout === 3)) {
-      throw new Error(
-        'dcs-react-router-sync: invalid query param (dcs-layout or dcs-interact-mode)'
-      )
+      throwError('invalid query param (dcs-layout or dcs-interact-mode)')
     }
     if (triggerId && !(layout === 2 || layout === 3)) {
-      throw new Error(
-        'dcs-react-router-sync: invalid query param (dcs-layout or dcs-trigger-id)'
-      )
+      throwError('invalid query param (dcs-layout or dcs-trigger-id)')
     }
     if (layout && (layout < 0 || layout === 1 || layout > 3)) {
-      throw new Error(
-        'dcs-react-router-sync: unsupported query param (dcs-layout)'
-      )
+      throwError('unsupported query param (dcs-layout)')
     }
 
     // Update the "selected" state in registered components
@@ -95,7 +92,7 @@ exports.runReactRouterSync = ({ browserHistory, routeMatcher }) => {
       // Get the pathname corresponding to the new route
       const pathname = await routeMatcher.getPathname(route.pageName)
       if (!pathname) {
-        throw new Error(`Cannot find pathname for page "${route.pageName}"`)
+        throwError(`Cannot find pathname for page "${route.pageName}"`)
       }
 
       // Add the correct query params. It is not necessary for this module,
@@ -123,6 +120,21 @@ exports.runReactRouterSync = ({ browserHistory, routeMatcher }) => {
       }
     }
   )
+
+  // Resize event with debounce
+  // https://developer.mozilla.org/en-US/docs/Web/Events/resize#setTimeout
+  window.addEventListener('resize', evt => {
+    if (this.resizeTimer !== null) {
+      clearTimeout(this.resizeTimer)
+    }
+    this.resizeTimer = setTimeout(() => {
+      this.resizeTimer = null
+      const node = g_selectedNode || g_prevSelectedNode
+      if (node) {
+        node.scrollIntoView({ behavior: 'smooth' })
+      }
+    }, 100)
+  })
 }
 
 //------------------------------------------------------------------------------
@@ -135,13 +147,12 @@ exports.withDcs = (WrappedComponent, pathname = undefined) =>
     constructor(props) {
       super(props)
 
-      if (!g_initDone) {
-        throw new Error(
-          'You need to call runReactRouterSync() before you can use withDcs()'
-        )
+      if (!g_routeMatcher) {
+        throwError('please call "runReactRouterSync" before using "withDcs"')
       }
 
-      this.pageNameFromPathname = pathname && routeMatcher.getPageName(pathname)
+      this.pageNameFromPathname =
+        pathname && g_routeMatcher.getPageName(pathname)
 
       const dcsSelected =
         new URLSearchParams(location.search).get('dcs-trigger-id') ===
@@ -192,7 +203,9 @@ exports.withDcs = (WrappedComponent, pathname = undefined) =>
       )
       const dcsCount = found ? found.count : 0
 
-      if (init) {
+      // If we awaited for this.pageNameFromPathname, we are not in the
+      // constructor anymore!
+      if (init && !this.pageNameFromPathname) {
         this.state.dcsCount = dcsCount
       } else {
         this.setState({ dcsCount })
@@ -225,19 +238,8 @@ exports.withDcs = (WrappedComponent, pathname = undefined) =>
 
 //------------------------------------------------------------------------------
 
-// Resize event with debounce
-// https://developer.mozilla.org/en-US/docs/Web/Events/resize#setTimeout
-window.addEventListener('resize', evt => {
-  if (this.resizeTimer !== null) {
-    clearTimeout(this.resizeTimer)
-  }
-  this.resizeTimer = setTimeout(() => {
-    this.resizeTimer = null
-    const node = g_selectedNode || g_prevSelectedNode
-    if (node) {
-      node.scrollIntoView({ behavior: 'smooth' })
-    }
-  }, 100)
-})
+function throwError(msg) {
+  throwError('' + msg)
+}
 
 //------------------------------------------------------------------------------
