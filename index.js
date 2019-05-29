@@ -239,7 +239,7 @@ exports.withDcs = (WrappedComponent, pathname = undefined) =>
 //------------------------------------------------------------------------------
 
 function throwError(msg) {
-  throwError('' + msg)
+  throw new Error('dcs-react-router-sync: ' + msg)
 }
 
 //------------------------------------------------------------------------------
