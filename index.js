@@ -92,7 +92,9 @@ exports.runReactRouterSync = ({ browserHistory, routeMatcher }) => {
       // Get the pathname corresponding to the new route
       const pathname = await routeMatcher.getPathname(route.pageName)
       if (!pathname) {
-        throwError(`Cannot find pathname for page "${route.pageName}"`)
+        const error = `Cannot find pathname for page "${route.pageName}"`
+        comToPlugin.postSetRouteProps({ error })
+        throwError(error)
       }
 
       // Add the correct query params. It is not necessary for this module,
