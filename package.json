@@ -1,6 +1,6 @@
 {
   "name": "dcs-react-router-sync",
-  "version": "1.0.16",
+  "version": "1.0.17",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -9,7 +9,9 @@
   "author": "Sylvain Quendez",
   "license": "MIT",
   "peerDependencies": {
-    "dcs-client": "1.x"
+    "dcs-client": "^1.0.0",
+    "react": "^16.0.0",
+    "react-dom": "^16.0.0"
   },
   "files": [
     "index.js",
